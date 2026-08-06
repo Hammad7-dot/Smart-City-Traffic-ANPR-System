@@ -1,0 +1,26 @@
+/* Streamlit's data-testid hooks are informal DOM attributes, not a stable public
+   API — re-verify visually in-browser after any streamlit version bump. */
+
+/* Card-style metrics */
+div[data-testid="stMetric"] {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8E8;
+    border-radius: 10px;
+    padding: 16px 18px;
+    box-shadow: 0 1px 3px rgba(15, 118, 110, 0.08);
+}
+div[data-testid="stMetricLabel"] { color: #4B5A5E; }
+div[data-testid="stMetricValue"] { color: #0E7C86; }
+
+/* Header polish */
+h1 {
+    color: #0E3B3E;
+    border-bottom: 2px solid #0E7C86;
+    padding-bottom: 8px;
+}
+
+/* Sidebar tint */
+section[data-testid="stSidebar"] { background-color: #F1F5F6; }
+
+/* Primary buttons */
+button[kind="primary"] { border-radius: 8px; }

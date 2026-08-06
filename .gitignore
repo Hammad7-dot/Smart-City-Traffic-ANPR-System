@@ -1,0 +1,16 @@
+data/
+output/
+database/*.db
+models/*.pt
+/yolov8n.pt
+/*.mp4
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# tests
+test_*.py
+*_test.py
+tests/
+.pytest_cache/
