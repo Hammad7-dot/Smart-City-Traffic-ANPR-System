@@ -9,8 +9,4 @@ __pycache__/
 .venv/
 venv/
 
-# tests
-test_*.py
-*_test.py
-tests/
 .pytest_cache/

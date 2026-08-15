@@ -263,3 +263,108 @@ deliverables layout.
 Alternatives considered: Downloading a public sample clip (not needed once
 the user supplied a video).
 Consequences: `Brasil1.mp4` and `data/` are gitignored (PII rules.md #6).
+
+## D-016: `pipeline/run_pipeline.py` writes H.264 directly via PyAV, superseding D-015's ffmpeg transcode
+Date: 2026-08-06
+Status: Accepted
+Context: D-015's `ffmpeg`-shellout preview workaround has a real failure
+mode it documents itself: if `ffmpeg` isn't on the user's PATH, the
+in-browser preview silently degrades to a download-only info message. A
+sibling project (RoadGuard AI) hit the identical root cause — `cv2.VideoWriter`
+with `mp4v` fourcc producing video browsers can't decode — and fixed it by
+writing H.264 directly with PyAV (`av`) instead of transcoding after the
+fact. `av` is already effectively proven in this stack's dependency
+neighborhood (same Python/OpenCV/YOLO environment) and removes an external
+non-pip dependency entirely.
+Decision: `pipeline/run_pipeline.py` now encodes its output video directly
+as H.264 using PyAV (`av.open(..., mode="w")`, `add_stream("libx264", ...)`,
+`stream.pix_fmt = "yuv420p"`) instead of `cv2.VideoWriter(..., fourcc="mp4v")`.
+`app/pages/upload_detect.py`'s `make_browser_preview()` ffmpeg-shellout
+function is removed; `st.video()` now plays the pipeline's own output file
+directly, no separate preview copy needed. `av` is added to
+`requirements.txt` (pinned `>=15.1,<19`, matching the same pin RoadGuard
+uses and for the same reason: avoids a broken source build seen with newer
+`av`/Python combos).
+Alternatives considered: Keeping D-015's ffmpeg shim (rejected — leaves the
+PATH-dependent failure mode in place for no benefit, now that a
+process-internal fix is proven to work in this exact stack). Switching
+`cv2.VideoWriter`'s fourcc to `avc1` (still rejected for the same reason
+D-015 rejected it — unreliable/absent H.264 encoder support in stock
+OpenCV builds on Windows).
+Consequences: `ffmpeg` is no longer needed anywhere in this project. One
+video file serves both the in-browser preview and the download button —
+no more separate preview tempfile. D-015 is superseded, not deleted, per
+this log's append-only convention.
+
+## D-017: Normalize uploaded video codec via PyAV before the pipeline reads it
+Date: 2026-08-13
+Status: Accepted
+Context: A real upload hit `RuntimeError: Could not open video source: <tmp path>`
+from `pipeline/run_pipeline.py::run()`'s `cv2.VideoCapture(...).isOpened()` check.
+Leading hypothesis going in: OpenCV's Windows pip wheels bundle a minimal
+FFMPEG build that historically lacks an HEVC/H.265 decoder (licensing), and
+modern phones default to recording `.mp4` in HEVC — `cv2.getBuildInformation()`
+reporting `FFMPEG: YES` only confirms FFMPEG integration exists, not which
+codecs it was built with. This was tested directly: a synthetic HEVC clip was
+generated with PyAV/libx265 and opened fine via `cv2.VideoCapture` in this
+environment, so HEVC-decode-missing is **not confirmed** as this specific
+failure's root cause — the exact trigger for the original error remains
+unconfirmed (candidates not ruled out: an unusual/rarer codec such as AV1, a
+partially-written or corrupt upload, or the dual `opencv-python` /
+`opencv-python-headless` install noted below). Regardless of the precise
+trigger, normalizing to a codec OpenCV reliably supports is a direct, general
+fix for "some video codec OpenCV's wheel can't read," and Ultralytics'
+`detector.track(source=...)` (used by `pipeline/tracking.py`) also reads the
+source via OpenCV internally, so a fix limited to the explicit
+`cv2.VideoCapture` check in `run()` would not be sufficient on its own even
+if the codec were the cause.
+Decision: New module `pipeline/video_io.py` exposes
+`normalize_for_opencv(input_path) -> str`, which opens the file with PyAV
+(`av`, already a dependency since D-016), checks the video stream's codec,
+and returns the path unchanged if it's already H.264. Otherwise it transcodes
+to a new temp H.264 `.mp4` (same `add_stream("libx264", ...)`/`yuv420p`
+pattern as D-016's output encoding) and returns that path instead.
+`app/pages/upload_detect.py` calls this on every uploaded video's tempfile
+before passing it to `run_pipeline.run()`, and cleans up the normalized
+tempfile in its existing `finally` block if a new one was created. Scoped to
+the upload path only (extends the D-014 exception) — the CLI
+(`--source ...`) is unchanged and still assumes the operator supplies a
+known-good source file.
+Alternatives considered: Fixing only the `cv2.VideoCapture` check in
+`run_pipeline.py` (rejected — Ultralytics' internal reader would still fail
+on HEVC, since it also goes through OpenCV). Requiring users to
+pre-transcode uploads themselves (rejected — defeats the point of an upload
+UI). Switching to a different OpenCV build/wheel with full FFMPEG codecs
+(rejected — bigger environment change for a problem PyAV already solves
+within the existing dependency set).
+Consequences: Every non-H.264 upload now pays a one-time transcode cost
+before detection starts (on top of the existing CPU-bound detection/OCR
+cost); H.264 uploads (including re-uploads of this pipeline's own output)
+pay no extra cost. Secondary, unaddressed observation from investigating
+this: both `opencv-python` and `opencv-python-headless` are installed
+side-by-side in this environment (pulled in transitively by different
+deps) — a known source of DLL/binding conflicts on Windows; not fixed here
+since it wasn't confirmed as the actual cause, but worth resolving if
+similar OpenCV issues recur.
+
+## D-018: Bump `requirements.txt` floors to match versions verified working in this environment
+Date: 2026-08-15
+Status: Accepted
+Context: A full pipeline test pass (CLI run, unit tests, D-017's codec-normalization path) was run
+against this environment's actually-installed package versions, all of which sit above
+`requirements.txt`'s `>=` floors: ultralytics 8.4.93, lap 0.5.13, streamlit 1.60.0, pandas 2.2.3,
+numpy 2.1.3, av 17.1.0. The old floors (some dating to pre-D-016/D-017) would let a fresh
+`pip install` resolve to an untested combination, including a numpy 1.x install that was never
+exercised against this codebase.
+Decision: Raise each floor to the version confirmed working: `ultralytics>=8.4.93`,
+`lap>=0.5.13`, `streamlit>=1.60.0`, `pandas>=2.2.3`, `numpy>=2.1.3`, `av>=17.1,<19` (keeping
+D-016's upper bound). `opencv-python>=4.10.0` and `easyocr>=1.7.2` were already at the installed
+version and are unchanged.
+Alternatives considered: Leaving the floors as-is (rejected — the whole point of a floor is that
+it's been exercised; these hadn't been, most notably the numpy 1.x/2.x boundary, which is a
+breaking change for some compiled extensions). Pinning exact versions with `==` (rejected — same
+reasoning as the existing partial pins here: floors are already the convention this file uses).
+Consequences: This has not been validated against a truly clean `pip install -r requirements.txt`
+in a fresh environment — only against the already-populated environment these versions came from.
+The numpy 1.x→2.x floor bump in particular is worth a clean-install smoke test before this is
+treated as fully confirmed.

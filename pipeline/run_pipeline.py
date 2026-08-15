@@ -12,8 +12,10 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  # avoid OpenMP double-ini
 import argparse
 import csv
 from datetime import datetime, timedelta
+from fractions import Fraction
 from pathlib import Path
 
+import av
 import cv2
 
 from pipeline.detection import VEHICLE_CLASS_MAP, load_detector
@@ -43,7 +45,16 @@ def run(source: str, db_path: str, output_video: str, output_csv: str, line_rati
 
     Path(output_video).parent.mkdir(parents=True, exist_ok=True)
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(output_video, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+
+    # H.264 via PyAV, not cv2.VideoWriter's default "mp4v" fourcc - browsers
+    # can't decode mp4v/MPEG-4 Part 2, so a mp4v-written .mp4 downloads and
+    # plays fine in a native player but never plays in an in-browser <video>
+    # element (see docs/decisions.md D-016, supersedes D-015's ffmpeg shim).
+    container = av.open(output_video, mode="w")
+    stream = container.add_stream("libx264", rate=Fraction(fps).limit_denominator())
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = "yuv420p"
 
     csv_file = open(output_csv, "w", newline="")
     csv_writer = csv.writer(csv_file)
@@ -55,48 +66,54 @@ def run(source: str, db_path: str, output_video: str, output_csv: str, line_rati
     crossing_count = 0
     frame_count = 0
 
-    for frame_index, frame, boxes in iter_tracked_frames(detector, source, VEHICLE_CLASS_MAP):
-        frame_count += 1
-        cv2.line(frame, (0, int(line_y)), (width, int(line_y)), (0, 255, 255), 2)
+    try:
+        for frame_index, frame, boxes in iter_tracked_frames(detector, source, VEHICLE_CLASS_MAP):
+            frame_count += 1
+            cv2.line(frame, (0, int(line_y)), (width, int(line_y)), (0, 255, 255), 2)
 
-        for box in boxes:
-            cv2.rectangle(frame, (int(box.x1), int(box.y1)), (int(box.x2), int(box.y2)), (0, 200, 0), 2)
-            cv2.putText(
-                frame, f"{box.vehicle_type}#{box.track_id}", (int(box.x1), max(int(box.y1) - 8, 0)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 2,
-            )
-
-            crossed = counter.update(box.track_id, box.centroid)
-            if not crossed:
-                continue
-
-            crossing_count += 1
-            event_time = start_time + timedelta(seconds=frame_index / fps)
-            event_timestamp = event_time.isoformat()
-
-            plate_crop = crop_plate_region(frame, (box.x1, box.y1, box.x2, box.y2), plate_detector)
-            plate_text, confidence = read_plate(ocr_reader, plate_crop)
-            is_low_confidence = confidence < LOW_CONFIDENCE_THRESHOLD
-
-            written = store.record_event(
-                track_id=box.track_id,
-                vehicle_type=box.vehicle_type,
-                plate_number=plate_text,
-                ocr_confidence=confidence,
-                is_low_confidence=is_low_confidence,
-                frame_number=frame_index,
-                event_timestamp=event_timestamp,
-            )
-            if written:
-                csv_writer.writerow(
-                    [box.track_id, box.vehicle_type, plate_text, f"{confidence:.3f}", int(is_low_confidence), frame_index, event_timestamp]
+            for box in boxes:
+                cv2.rectangle(frame, (int(box.x1), int(box.y1)), (int(box.x2), int(box.y2)), (0, 200, 0), 2)
+                cv2.putText(
+                    frame, f"{box.vehicle_type}#{box.track_id}", (int(box.x1), max(int(box.y1) - 8, 0)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 2,
                 )
 
-        writer.write(frame)
+                crossed = counter.update(box.track_id, box.centroid)
+                if not crossed:
+                    continue
 
-    writer.release()
-    csv_file.close()
-    store.close()
+                crossing_count += 1
+                event_time = start_time + timedelta(seconds=frame_index / fps)
+                event_timestamp = event_time.isoformat()
+
+                plate_crop = crop_plate_region(frame, (box.x1, box.y1, box.x2, box.y2), plate_detector)
+                plate_text, confidence = read_plate(ocr_reader, plate_crop)
+                is_low_confidence = confidence < LOW_CONFIDENCE_THRESHOLD
+
+                written = store.record_event(
+                    track_id=box.track_id,
+                    vehicle_type=box.vehicle_type,
+                    plate_number=plate_text,
+                    ocr_confidence=confidence,
+                    is_low_confidence=is_low_confidence,
+                    frame_number=frame_index,
+                    event_timestamp=event_timestamp,
+                )
+                if written:
+                    csv_writer.writerow(
+                        [box.track_id, box.vehicle_type, plate_text, f"{confidence:.3f}", int(is_low_confidence), frame_index, event_timestamp]
+                    )
+
+            av_frame = av.VideoFrame.from_ndarray(frame, format="bgr24")
+            for packet in stream.encode(av_frame):
+                container.mux(packet)
+
+        for packet in stream.encode():
+            container.mux(packet)
+    finally:
+        container.close()
+        csv_file.close()
+        store.close()
 
     print(f"Processed {frame_count} frames, {crossing_count} crossing events.")
     print(f"Output video: {output_video}")
