@@ -368,3 +368,107 @@ Consequences: This has not been validated against a truly clean `pip install -r 
 in a fresh environment — only against the already-populated environment these versions came from.
 The numpy 1.x→2.x floor bump in particular is worth a clean-install smoke test before this is
 treated as fully confirmed.
+
+## D-019: Standardize on `opencv-python-headless`, drop `opencv-python`
+Date: 2026-08-15
+Status: Accepted
+Context: D-017 flagged `opencv-python` and `opencv-python-headless` being installed side-by-side as a
+known source of DLL/binding conflicts on Windows, left unfixed pending confirmation it wasn't the
+root cause of that decision's actual bug. Revisited independently: no `cv2.imshow`/`cv2.namedWindow`/
+GUI call exists anywhere in this codebase (confirmed via grep across the repo), so the GUI-capable
+`opencv-python` build buys nothing here — `opencv-python-headless` is fully sufficient. Confirmed the
+conflict is real: `pip uninstall opencv-python` in this environment broke `import cv2` entirely
+(`AttributeError: module 'cv2' has no attribute '__version__'`, core `cv2/__init__.py` and the
+compiled extension missing) because both packages install into the same `cv2/` site-packages
+directory and pip's uninstall removed files the other package also depended on. Fixed by
+force-reinstalling `opencv-python-headless` (`pip install --force-reinstall --no-deps
+opencv-python-headless==4.10.0.84`), which restored a working `cv2` import.
+Decision: Standardize on `opencv-python-headless` only. `requirements.txt`'s
+`opencv-python>=4.10.0` line is changed to `opencv-python-headless>=4.10.0`.
+Alternatives considered: Keeping both installed (rejected — proven broken, not just theoretically
+risky). Keeping `opencv-python` instead of headless (rejected — no GUI functionality is used, and
+headless is the standard choice for server/Streamlit deployments).
+Consequences: A fresh `pip install -r requirements.txt` now only ever installs one opencv build,
+eliminating this conflict class going forward. If GUI-based local debugging (`cv2.imshow`) is ever
+wanted, this decision would need revisiting.
+
+## D-020: B-003 (data retention/privacy policy) resolved as "no retention limit for v1, local-dev-only"
+Date: 2026-08-15
+Status: Accepted
+Context: B-003 asks how long raw video, cropped plate images, and DB rows are retained, and whether
+anonymization is required outside law-enforcement use. This remained open through all of v1's build
+since it requires a policy decision, not something inferable from the spec or code.
+Decision: For v1, no retention limit and no automated purge job. This build is explicitly
+local/dev-only, per rules.md's existing "plate_number is PII" constraint. This decision does not
+authorize deploying beyond local dev — it only formally closes the open question with an explicit
+"not yet decided beyond dev scope" answer instead of leaving it silently unanswered. A real retention
+policy (time-based purge, anonymization for the analytics dashboard's non-law-enforcement use, or
+similar) must be decided and logged as its own future decision before any deployment beyond local
+dev/testing.
+Alternatives considered: Picking an arbitrary retention window now (e.g. 30/90 days) — rejected,
+since inventing a number without a stakeholder/compliance requirement behind it would be exactly the
+kind of guessed-value rules.md prohibits ("unresolved ambiguity blocks, it doesn't get guessed").
+Consequences: `database/traffic.db` continues to accumulate `vehicle_events` rows indefinitely with
+no purge mechanism. This is acceptable only because the project is explicitly local/dev-only;
+revisit before any wider deployment.
+
+## D-021: Custom-trained YOLOv8n plate detector now in use (supersedes D-011)
+Date: 2026-08-16
+Status: Accepted
+Context: D-011 documented that no no-auth pretrained plate-detector weights could be sourced.
+Revisited with a Roboflow API key available: the public Universe project SPEC.md §7 names
+(`roboflow-universe-projects/license-plate-recognition-rxg4e`, version 11) does not offer a
+downloadable trained `.pt` file for this account/tier — `version.model.download('pt', ...)` 404s.
+Only its hosted inference API (network call per request) or a raw dataset export (images + YOLO
+labels, no trained weights) are available. Sending vehicle-frame crops to a third-party cloud API
+per crossing event was rejected as a materially different privacy posture than local inference
+(compounds the still-open spirit of D-020/B-003 rather than resolving it), so the dataset export
+path was used instead: the exported dataset (7,057 train / 2,048 valid / 1,020 test images, single
+class `License_Plate`, CC BY 4.0) was downloaded locally, then trained into a YOLOv8n detector in
+Google Colab (GPU) — 50 epochs, imgsz 640 — since this project's local box is CPU-only and training
+this dataset directly here was impractical.
+Decision: The resulting weights are placed at `models/plate_model.pt`, which
+`pipeline/plate_detection.py::load_plate_detector()` already auto-loads with no code changes. This
+is a deliberate, logged exception to rules.md's "pretrained-first, custom training out of scope for
+v1 unless a decision entry says otherwise" — this entry is that decision, made necessary because no
+usable pretrained weights existed for the project's own named dataset. The 549MB dataset export used
+for training (`models/_rf_dataset/`) was deleted after training completed; it's reproducible via the
+Roboflow API + the same Colab training steps if retraining is ever needed, so keeping it in the repo
+tree wasn't warranted.
+Alternatives considered: Roboflow's hosted inference API (rejected — privacy/network-dependency
+reasons above). Continuing with the D-011 heuristic crop indefinitely (rejected — user requested a
+real model now that training was feasible via Colab's free GPU tier).
+Consequences: See D-022 for the measured effect on this project's actual accuracy baseline — result
+was more mixed than "just wire in a real model and confidence goes up."
+
+## D-022: Accuracy baseline recorded after D-021's model swap (resolves remainder of D-007)
+Date: 2026-08-16
+Status: Accepted
+Context: D-007 shipped v1 without a formal accuracy gate, qualitative-only verification. With a real
+plate detector now in place (D-021), this is the first point where a meaningful before/after
+comparison exists on the same sample video (`data/videos/traffic.mp4`, `--line-ratio` default).
+Decision: Recorded as the current baseline — same 5 crossing events both before and after D-021
+(track IDs 15/24/41/70/84; the detector/tracker/counting stages are unaffected by the plate-detector
+swap, as expected since plate detection only runs post-crossing). Plate OCR confidence, before
+(heuristic lower-third crop) vs. after (real YOLOv8n plate detector):
+  - track 15 (car): `EIE` 0.072 → `EIE` 0.072 (unchanged)
+  - track 24 (bike): empty 0.000 → empty 0.000 (unchanged)
+  - track 41 (bus): `ABR573` 0.155 → `ABR573` 0.179 (marginal improvement)
+  - track 70 (bus): `AJIJO` 0.439 → empty 0.000 (regressed on this run)
+  - track 84 (car): empty 0.000 → empty 0.000 (unchanged)
+A direct check confirmed the trained detector does work — sampled across 301 vehicle crops from this
+same video, it found a plate box in 157 (~52%) — so the lack of improvement isn't a wiring bug. The
+conclusion: for this specific sample video, OCR confidence is bottlenecked by the source footage's
+plate resolution/legibility (small, distant, CCTV-quality plates), not by crop precision — a tighter,
+correctly-located crop doesn't help OCR read text that isn't legible at the source pixel level.
+`LOW_CONFIDENCE_THRESHOLD` (`pipeline/ocr.py`, currently `0.4`) still correctly flags every read from
+this run as low-confidence and is left unchanged — nothing in this data suggests it's set wrong.
+Alternatives considered: Declaring this a clear win based on detector hit-rate alone (rejected —
+`output/logs.csv`'s actual confidence numbers are the metric that matters for FR5, not detector
+recall in isolation). Re-tuning the OCR/detector against this one video (rejected — would be
+overfitting a "baseline" to a single low-quality sample rather than reporting it honestly).
+Consequences: This baseline is one video, not a validation set, and shouldn't be over-read as
+general model quality — it should still measurably help on higher-resolution footage where plates
+are closer to camera. If plate legibility on target deployment footage is expected to be this poor,
+FR5's OCR-accuracy expectations should be revisited with a stakeholder, per B-004/D-007's original
+unresolved point about no formal accuracy target ever being supplied.
