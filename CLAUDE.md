@@ -110,8 +110,9 @@ python -m pipeline.purge --db database/traffic.db --days 30
 # report OCR confidence distribution from a logs.csv, to help tune LOW_CONFIDENCE_THRESHOLD
 python -m pipeline.eval_confidence --csv output/logs.csv
 
-# run the test suite
-pytest
+# run the test suite (python -m, not bare pytest - needed so the repo root
+# is on sys.path and `import pipeline` resolves without an installed package)
+python -m pytest
 ```
 
 `ffmpeg` on PATH is optional but recommended: the Upload & Detect page's

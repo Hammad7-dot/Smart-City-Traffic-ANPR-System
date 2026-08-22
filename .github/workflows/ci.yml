@@ -17,4 +17,4 @@ jobs:
       - name: Run tests
         env:
           KMP_DUPLICATE_LIB_OK: "TRUE"
-        run: pytest -q
+        run: python -m pytest -q
