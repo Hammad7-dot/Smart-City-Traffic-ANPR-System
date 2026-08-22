@@ -509,3 +509,26 @@ Consequences: `database/traffic.db` no longer accumulates indefinitely once the 
 a schedule — but nothing runs it automatically yet; an operator (or external cron) must invoke it.
 B-003 is now resolved for v1's stated scope; still worth revisiting before any deployment where an
 automated schedule (not manual invocation) is required.
+
+## D-025: Streamlit Community Cloud deploy config (runtime.txt, packages.txt)
+Date: 2026-08-22
+Status: Accepted
+Context: User deployed the app to Streamlit Community Cloud. It failed on `import cv2` in
+`app/pages/upload_detect.py` — the platform's default Python was 3.14, far newer than the 3.11 this
+project is actually tested against (CI, D-018's verified floors), and `opencv-python-headless`
+likely has no working wheel for 3.14 yet; even where it does, Streamlit Cloud's minimal Debian image
+is missing shared libs (`libgl1`, `libglib2.0-0`) that OpenCV's Python bindings load at import time
+even in headless builds.
+Decision: Added `runtime.txt` (`python-3.11`) to pin the platform's interpreter to the tested
+version, and `packages.txt` (`libgl1`, `libglib2.0-0`) so Streamlit Cloud apt-installs them before
+`pip install -r requirements.txt`. Both are Streamlit Cloud's own convention for this — no code
+changes needed.
+Alternatives considered: Downgrading/pinning `opencv-python-headless` further (rejected — the
+underlying Python-version mismatch would remain; fixing the interpreter version is the actual root
+cause here). Switching to a `opencv-python` GUI build (rejected — same standardization D-019 already
+settled, still no GUI usage in this codebase).
+Consequences: This is now a real deployment beyond local dev — D-020/B-003's retention caveat is no
+longer hypothetical. D-024's 30-day purge (`python -m pipeline.purge`) exists but nothing invokes it
+automatically on Streamlit Cloud; worth wiring to a scheduled job (e.g. Streamlit Cloud doesn't offer
+native cron, so this would need an external trigger) before this deployment is treated as
+retention-compliant, not just functional.
