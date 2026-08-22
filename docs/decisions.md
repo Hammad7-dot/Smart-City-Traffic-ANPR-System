@@ -520,9 +520,14 @@ likely has no working wheel for 3.14 yet; even where it does, Streamlit Cloud's 
 is missing shared libs (`libgl1`, `libglib2.0-0`) that OpenCV's Python bindings load at import time
 even in headless builds.
 Decision: Added `runtime.txt` (`python-3.11`) to pin the platform's interpreter to the tested
-version, and `packages.txt` (`libgl1`, `libglib2.0-0`) so Streamlit Cloud apt-installs them before
+version, and `packages.txt` so Streamlit Cloud apt-installs system libs before
 `pip install -r requirements.txt`. Both are Streamlit Cloud's own convention for this — no code
-changes needed.
+changes needed. `packages.txt` initially listed `libgl1` and `libglib2.0-0`, but the platform's apt
+sources mix Debian bullseye-security and trixie repos, and `libglib2.0-0` there resolved to a
+bullseye version depending on `libffi7`/`libpcre3` — packages trixie's repos don't provide (trixie
+renamed the package `libglib2.0-0t64` for the 64-bit time_t transition), so apt reported unmet
+dependencies and failed the whole deploy. Dropped `libglib2.0-0` — `libgl1` alone is what
+opencv-python-headless's import path actually needs.
 Alternatives considered: Downgrading/pinning `opencv-python-headless` further (rejected — the
 underlying Python-version mismatch would remain; fixing the interpreter version is the actual root
 cause here). Switching to a `opencv-python` GUI build (rejected — same standardization D-019 already
