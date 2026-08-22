@@ -526,8 +526,17 @@ changes needed. `packages.txt` initially listed `libgl1` and `libglib2.0-0`, but
 sources mix Debian bullseye-security and trixie repos, and `libglib2.0-0` there resolved to a
 bullseye version depending on `libffi7`/`libpcre3` — packages trixie's repos don't provide (trixie
 renamed the package `libglib2.0-0t64` for the 64-bit time_t transition), so apt reported unmet
-dependencies and failed the whole deploy. Dropped `libglib2.0-0` — `libgl1` alone is what
-opencv-python-headless's import path actually needs.
+dependencies and failed the whole deploy. Dropped `libglib2.0-0` — but `libgl1` alone wasn't sufficient either: cv2 then failed at import with
+`ImportError: libgthread-2.0.so.0: cannot open shared object file`, meaning the gthread part of glib
+was still needed, just not resolvable under the ambiguous `libglib2.0-0` name on this trixie-based
+image. Re-added it as `libglib2.0-0t64` — trixie's actual package name post time_t transition — which
+apt can resolve cleanly from the trixie repos without pulling in the conflicting bullseye version.
+Separately noted: `runtime.txt`'s `python-3.11` pin did not take effect on this already-created
+Streamlit Cloud app (traceback still showed `python3.14`) — Streamlit Cloud appears to lock the
+interpreter version at app-creation time via its own dashboard setting, not via `runtime.txt`, for
+apps that already exist. Not fixed here (no code/repo-level fix available); the workaround is to
+change the Python version in the app's "Advanced settings" on Streamlit Cloud directly, or delete
+and recreate the app so `runtime.txt` is honored at creation.
 Alternatives considered: Downgrading/pinning `opencv-python-headless` further (rejected — the
 underlying Python-version mismatch would remain; fixing the interpreter version is the actual root
 cause here). Switching to a `opencv-python` GUI build (rejected — same standardization D-019 already
