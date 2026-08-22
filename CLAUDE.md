@@ -103,6 +103,15 @@ python -m pipeline.run_pipeline --source data/videos/traffic.mp4
 
 # launch the dashboard (reads database/traffic.db)
 streamlit run app/streamlit_app.py
+
+# purge vehicle_events rows older than N days (D-024 retention policy, resolves B-003)
+python -m pipeline.purge --db database/traffic.db --days 30
+
+# report OCR confidence distribution from a logs.csv, to help tune LOW_CONFIDENCE_THRESHOLD
+python -m pipeline.eval_confidence --csv output/logs.csv
+
+# run the test suite
+pytest
 ```
 
 `ffmpeg` on PATH is optional but recommended: the Upload & Detect page's
@@ -110,7 +119,12 @@ in-browser video preview needs it to transcode the pipeline's mp4v output to
 browser-playable H.264 (docs/decisions.md D-015). Without it, the preview player is
 skipped but the download button still works.
 
-No test suite or linter is configured yet.
+Test suite: `pytest` (tests/), covering detection, tracking, line-crossing, plate-detection crop,
+OCR, storage/purge, eval_confidence, and an end-to-end `run_pipeline.run()` smoke test with faked
+detector/tracker/OCR components. `tests/conftest.py` sets `KMP_DUPLICATE_LIB_OK=TRUE` before
+collection, since test modules that import `pipeline.ocr` directly (bypassing `run_pipeline.py`)
+need it too. CI (`.github/workflows/ci.yml`) runs a clean `pip install -r requirements.txt` + pytest
+on every push/PR (resolves D-018's untested-clean-install caveat). No linter configured yet.
 
 ## Known limitations from the current build (see docs/decisions.md D-011, D-013)
 
@@ -134,3 +148,6 @@ and must not be deployed further without answering it first.
 
 Do not silently resolve new ambiguities — add to `docs/blocked.md`, and move to
 `docs/decisions.md` once actually decided.
+
+B-003 is now resolved via D-024 (30-day time-based purge, `python -m pipeline.purge`) — but the
+purge is manual/externally-scheduled, not automatic. Nothing runs it on a cron yet.

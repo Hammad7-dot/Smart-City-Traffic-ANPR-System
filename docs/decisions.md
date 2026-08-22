@@ -472,3 +472,40 @@ general model quality — it should still measurably help on higher-resolution f
 are closer to camera. If plate legibility on target deployment footage is expected to be this poor,
 FR5's OCR-accuracy expectations should be revisited with a stakeholder, per B-004/D-007's original
 unresolved point about no formal accuracy target ever being supplied.
+
+## D-023: Pin `pyarrow>=7.0,<25` in requirements.txt
+Date: 2026-08-22
+Status: Accepted
+Context: `app/pages/dashboard.py`'s `st.bar_chart(counts)` call crashed with `ImportError: DLL load
+failed while importing lib` from pyarrow. Root cause: pyarrow was an unpinned transitive dependency
+(pulled in by streamlit/pandas), and a `pip install pyarrow` resolved to 25.0.1 — above streamlit
+1.60.0's own internal ceiling of `pyarrow<25` — producing a broken/mismatched native extension.
+Reinstalling with the constraint (`pyarrow>=7.0,<25`) resolved to 24.0.0 and fixed the import.
+Decision: Add `pyarrow>=7.0,<25` to `requirements.txt` explicitly, matching streamlit's own
+constraint, so a fresh install can't silently drift into this again.
+Alternatives considered: Leaving it unpinned and relying on pip's resolver to respect streamlit's
+transitive constraint (rejected — it didn't: a direct `pip install pyarrow` ignored streamlit's
+ceiling and picked the newest release anyway).
+Consequences: `requirements.txt` now pins the version verified working; same class of drift risk as
+D-018 for the rest of the floors, still not validated against a fully clean install.
+
+## D-024: 30-day time-based purge for vehicle_events (resolves remainder of B-003)
+Date: 2026-08-22
+Status: Accepted
+Context: D-020 formally closed B-003 as "no retention limit for v1, local-dev-only" but left the
+real policy decision open, explicitly requiring it before any deployment beyond local dev. User was
+asked directly and chose a 30-day time-based purge.
+Decision: `EventStore.purge_older_than(days)` (`pipeline/storage.py`) deletes `vehicle_events` rows
+where `event_timestamp` is older than `days`. Exposed as a CLI, `python -m pipeline.purge --db
+database/traffic.db --days 30`, run manually or via an external scheduler (cron/Task Scheduler) —
+not wired into `run_pipeline.py` itself, since purging is an operational/retention concern separate
+from a single pipeline run.
+Alternatives considered: Masking/hashing `plate_number` after N days instead of deleting the row
+(rejected by user in favor of a full delete — simpler, and crossing counts aren't needed
+per-plate after 30 days for this project's stated use). Wiring the purge into every `run()` call
+(rejected — couples an unrelated retention policy to the detection pipeline; a separate CLI keeps
+`pipeline/run_pipeline.py` unchanged and the purge schedule independently controllable).
+Consequences: `database/traffic.db` no longer accumulates indefinitely once the purge CLI is run on
+a schedule — but nothing runs it automatically yet; an operator (or external cron) must invoke it.
+B-003 is now resolved for v1's stated scope; still worth revisiting before any deployment where an
+automated schedule (not manual invocation) is required.

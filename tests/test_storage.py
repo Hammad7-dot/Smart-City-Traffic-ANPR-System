@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from pipeline.storage import EventStore
 
 
@@ -55,4 +57,29 @@ def test_different_plates_within_window_both_recorded(tmp_path):
     store.record_event(**_event(plate_number="AAA111", event_timestamp="2026-01-01T12:00:00"))
     assert store.record_event(**_event(plate_number="BBB222", event_timestamp="2026-01-01T12:00:01")) is True
     assert _count(store) == 2
+    store.close()
+
+
+def test_purge_older_than_deletes_only_old_rows(tmp_path):
+    store = EventStore(str(tmp_path / "test.db"))
+    old_ts = (datetime.now() - timedelta(days=40)).isoformat()
+    recent_ts = (datetime.now() - timedelta(days=5)).isoformat()
+    store.record_event(**_event(plate_number="OLD111", event_timestamp=old_ts))
+    store.record_event(**_event(plate_number="NEW222", event_timestamp=recent_ts))
+
+    deleted = store.purge_older_than(30)
+
+    assert deleted == 1
+    assert _count(store) == 1
+    remaining = store.conn.execute("SELECT plate_number FROM vehicle_events").fetchone()[0]
+    assert remaining == "NEW222"
+    store.close()
+
+
+def test_purge_older_than_no_matches_deletes_nothing(tmp_path):
+    store = EventStore(str(tmp_path / "test.db"))
+    store.record_event(**_event(event_timestamp=datetime.now().isoformat()))
+
+    assert store.purge_older_than(30) == 0
+    assert _count(store) == 1
     store.close()

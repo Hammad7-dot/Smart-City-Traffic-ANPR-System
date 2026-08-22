@@ -5,4 +5,5 @@ lap>=0.5.13
 streamlit>=1.60.0
 pandas>=2.2.3
 numpy>=2.1.3
+pyarrow>=7.0,<25
 av>=17.1,<19

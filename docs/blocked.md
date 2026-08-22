@@ -51,8 +51,9 @@ Why it matters: Plate numbers are PII; storing indefinitely without a policy
 is a compliance risk the moment this leaves prototype stage.
 Proposed default: None — this needs an explicit answer before any deployment
 beyond local dev/testing.
-Status: Resolved (→ D-020, no retention limit for v1 — still genuinely open
-for any deployment beyond local dev)
+Status: Resolved (→ D-020, D-024 — 30-day time-based purge implemented,
+`python -m pipeline.purge`; run manually/via external scheduler, not
+automatic)
 
 ## B-004: Accuracy/threshold targets undefined
 Raised: (from source doc review)

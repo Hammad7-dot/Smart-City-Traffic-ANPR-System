@@ -61,5 +61,12 @@ class EventStore:
             )
         return True
 
+    def purge_older_than(self, days: int) -> int:
+        """Deletes vehicle_events rows older than `days` (D-024 retention policy). Returns rows deleted."""
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        with self.conn:
+            cur = self.conn.execute("DELETE FROM vehicle_events WHERE event_timestamp < ?", (cutoff,))
+        return cur.rowcount
+
     def close(self):
         self.conn.close()
