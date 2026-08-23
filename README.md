@@ -1,10 +1,12 @@
 # Smart City Traffic ANPR System
 
+**Live demo:** https://smart-city-traffic-anpr-system-q5skn4nku6cqwkuukr4mam.streamlit.app/
+
 Real-time traffic monitoring pipeline: YOLOv8 vehicle detection → tracking →
 line-crossing vehicle counts → license plate OCR → SQLite → Streamlit dashboard.
 Built pretrained-first (no custom training) for a smart-city ANPR use case.
 
-<!-- TODO: add a screenshot of the Streamlit dashboard here once captured -->
+<!-- TODO: add a demo gif of the Streamlit dashboard here once the file path is available -->
 
 ## Architecture
 
@@ -67,9 +69,14 @@ python -m pipeline.run_pipeline --source data/videos/traffic.mp4
 
 # launch the dashboard (reads database/traffic.db)
 streamlit run app/streamlit_app.py
+
+# purge vehicle_events rows older than N days (retention policy)
+python -m pipeline.purge --db database/traffic.db --days 30
 ```
 
-No test suite or linter is configured yet.
+Test suite: `python -m pytest` (bare `pytest` won't resolve `import pipeline` without an installed
+package — see `tests/conftest.py`). CI (`.github/workflows/ci.yml`) runs a clean install + full
+test suite on every push/PR.
 
 ## Tech stack
 
@@ -78,13 +85,14 @@ SQLite (→ PostgreSQL later).
 
 ## Project status & privacy
 
-This is a v1/local-dev build, run end-to-end against a sample video. Plate numbers and
-any frame with a readable plate are treated as PII — raw sample footage, exported logs
-with real plates, and DB dumps are never committed (see `.gitignore`).
+This is a v1 build, deployed live on Streamlit Community Cloud (see link at the top). Plate
+numbers and any frame with a readable plate are treated as PII — raw sample footage, exported
+logs with real plates, and DB dumps are never committed (see `.gitignore`).
 
-**Data retention/privacy policy is still an open question** (see
-[docs/blocked.md](docs/blocked.md), B-003) — this build must not be deployed beyond
-local/dev use until that's resolved.
+**Data retention**: `vehicle_events` rows older than 30 days are purged via
+`python -m pipeline.purge` (see [docs/decisions.md](docs/decisions.md) D-024, resolving
+[docs/blocked.md](docs/blocked.md) B-003) — but the purge is manual/externally-scheduled, not
+automatic yet.
 
 ## Repo layout
 
