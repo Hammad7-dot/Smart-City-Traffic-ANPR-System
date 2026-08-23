@@ -6,7 +6,7 @@ Real-time traffic monitoring pipeline: YOLOv8 vehicle detection → tracking →
 line-crossing vehicle counts → license plate OCR → SQLite → Streamlit dashboard.
 Built pretrained-first (no custom training) for a smart-city ANPR use case.
 
-<!-- TODO: add a demo gif of the Streamlit dashboard here once the file path is available -->
+![Dashboard demo](docs/demo.gif)
 
 ## Architecture
 
