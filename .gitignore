@@ -1,6 +1,7 @@
 data/
 output/
 database/*.db
+database/*.db-*
 models/*.pt
 /yolov8n.pt
 /*.mp4

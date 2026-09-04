@@ -62,9 +62,9 @@ else:
         st.subheader("Plate log")
         st.dataframe(
             filtered[["event_timestamp", "vehicle_type", "plate_number", "ocr_confidence", "is_low_confidence", "track_id"]],
-            use_container_width=True,
+            width="stretch",
         )
 
         st.subheader("Historical report: events over time")
         timeline = filtered.set_index("event_timestamp").resample("1min").size()
-        st.line_chart(timeline, use_container_width=True)
+        st.line_chart(timeline, width="stretch")

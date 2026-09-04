@@ -1,4 +1,7 @@
 import numpy as np
+import warnings
+
+import pipeline.ocr as ocr
 
 from pipeline.ocr import LOW_CONFIDENCE_THRESHOLD, read_plate
 
@@ -62,3 +65,38 @@ def test_all_non_alnum_text_becomes_none():
 
 def test_low_confidence_threshold_value():
     assert LOW_CONFIDENCE_THRESHOLD == 0.4
+
+
+def test_cpu_pin_memory_notice_is_scoped_to_ocr_call():
+    class Reader:
+        device = "cpu"
+
+        def readtext(self, crop):
+            warnings.warn_explicit(
+                "'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.",
+                UserWarning, "dataloader.py", 759, module="torch.utils.data.dataloader",
+            )
+            warnings.warn("unrelated OCR warning", UserWarning)
+            return [(None, "ABC123", 0.9)]
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        assert read_plate(Reader(), np.zeros((10, 10, 3), dtype=np.uint8)) == ("ABC123", 0.9)
+        warnings.warn("outside OCR", UserWarning)
+    assert [str(w.message) for w in captured] == ["unrelated OCR warning", "outside OCR"]
+
+
+def test_reader_load_scopes_known_upstream_quantization_notice(monkeypatch):
+    def reader(*args, **kwargs):
+        warnings.warn_explicit(
+            "torch.quantize_per_tensor, torch.quantize_per_channel and other quantized tensor creation functions that produce tensors with dtype torch.quint8, torch.qint8, and torch.qint32 are deprecated and will be removed in a future PyTorch release.",
+            UserWarning, "rnn.py", 162, module="torch.ao.nn.quantized.dynamic.modules.rnn",
+        )
+        warnings.warn("another initialization warning", UserWarning)
+        return object()
+
+    monkeypatch.setattr(ocr.easyocr, "Reader", reader)
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        ocr.load_reader()
+    assert [str(w.message) for w in captured] == ["another initialization warning"]

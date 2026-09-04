@@ -51,8 +51,18 @@ See [docs/decisions.md](docs/decisions.md) (D-011, D-013, D-021, D-022) for deta
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+# Windows PowerShell:
+.venv/Scripts/python.exe -m pip install -r requirements.txt pytest
+.venv/Scripts/python.exe -m pip check
+# Linux/macOS: use .venv/bin/python instead.
 ```
+
+Use this environment for all commands below (activate it or use its Python path).
+Do not install into shared Anaconda. The official `ultralytics-opencv-headless`
+package supplies the same `ultralytics` import without pulling in GUI OpenCV.
+Do not install standard `ultralytics` or `opencv-python` alongside it. CI checks
+dependency consistency with `pip check` after its clean install.
 
 Set `KMP_DUPLICATE_LIB_OK=TRUE` in the environment before running anything that imports
 `torch` (this Anaconda install links two OpenMP runtimes and crashes on import otherwise).
@@ -71,8 +81,12 @@ python -m pipeline.run_pipeline --source data/videos/traffic.mp4
 # launch the dashboard (reads database/traffic.db)
 streamlit run app/streamlit_app.py
 
-# purge vehicle_events rows older than N days (retention policy)
+# preview expired database rows and generated output videos/CSVs (no deletion)
+python -m pipeline.purge --days 30 --dry-run
+
+# apply retention after reviewing the preview (irreversible deletion)
 python -m pipeline.purge --db database/traffic.db --days 30
+# optional: --database-only leaves generated files untouched
 ```
 
 Test suite: `python -m pytest` (bare `pytest` won't resolve `import pipeline` without an installed
@@ -99,10 +113,15 @@ This is a v1 build, deployed live on Streamlit Community Cloud (see link at the 
 numbers and any frame with a readable plate are treated as PII — raw sample footage, exported
 logs with real plates, and DB dumps are never committed (see `.gitignore`).
 
-**Data retention**: `vehicle_events` rows older than 30 days are purged via
-`python -m pipeline.purge` (see [docs/decisions.md](docs/decisions.md) D-024, resolving
-[docs/blocked.md](docs/blocked.md) B-003) — but the purge is manual/externally-scheduled, not
-automatic yet.
+**Data retention**: `python -m pipeline.purge` removes database events older than
+30 days and generated `.mp4`/`.csv` files under `output/` last modified more than
+30 days ago (D-024/D-027). It skips links/junctions and never scans `data/` or
+`models/`. Reserve `output/` for disposable generated artifacts; custom output
+paths outside it are not covered. Preview with `--dry-run` before deleting.
+
+Daily scheduling is an operator setup step, not automatically installed by the
+app. See [maintenance instructions](docs/MAINTENANCE.md) for Windows/Linux setup,
+warning handling, and OCR accuracy validation requirements.
 
 ## Repo layout
 

@@ -75,7 +75,7 @@ if kind == "video":
     line_ratio = st.sidebar.slider("Counting line position (fraction of frame height)", 0.1, 0.9, 0.6, 0.05)
 
 run_clicked = st.sidebar.button(
-    "Run detection", type="primary", use_container_width=True, disabled=uploaded is None
+    "Run detection", type="primary", width="stretch", disabled=uploaded is None
 )
 
 if not uploaded:
@@ -159,7 +159,7 @@ if result and result["kind"] == "image":
     detections = result["detections"]
     annotated = result["annotated"]
 
-    st.image(annotated, channels="BGR", use_container_width=True, caption=f"{len(detections)} vehicle(s) detected")
+    st.image(annotated, channels="BGR", width="stretch", caption=f"{len(detections)} vehicle(s) detected")
 
     if not detections:
         st.warning("No vehicles detected. Try lowering the confidence threshold in the sidebar.")
@@ -175,7 +175,7 @@ if result and result["kind"] == "image":
                 for d in detections
             ]
         )
-        st.dataframe(results_df, use_container_width=True)
+        st.dataframe(results_df, width="stretch")
 
     st.caption("Results shown here are session-only and are not written to the database (see decisions.md D-014).")
 
@@ -192,14 +192,21 @@ elif result and result["kind"] == "video":
     output_video = result["output_video"]
     output_csv = result["output_csv"]
 
+    try:
+        video_bytes = Path(output_video).read_bytes()
+        csv_bytes = Path(output_csv).read_bytes()
+    except FileNotFoundError:
+        st.session_state.pop("upload_result", None)
+        st.info("These generated results have expired or been removed. Run detection again to regenerate them.")
+        st.stop()
+
     st.success("Video processed. New crossing events (if any) were written to the database — check the Dashboard page.")
     st.metric("Crossing events detected", result["crossing_count"])
     if result["crossing_count"] == 0:
         st.info("No vehicles crossed the counting line. Try adjusting the line position in the sidebar and re-running.")
 
-    video_bytes = Path(output_video).read_bytes()
     st.video(video_bytes)
     st.download_button("Download annotated video", data=video_bytes, file_name=Path(output_video).name, mime="video/mp4")
     st.download_button(
-        "Download CSV log", data=Path(output_csv).read_bytes(), file_name=Path(output_csv).name, mime="text/csv"
+        "Download CSV log", data=csv_bytes, file_name=Path(output_csv).name, mime="text/csv"
     )

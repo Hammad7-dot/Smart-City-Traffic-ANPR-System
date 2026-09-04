@@ -546,3 +546,46 @@ longer hypothetical. D-024's 30-day purge (`python -m pipeline.purge`) exists bu
 automatically on Streamlit Cloud; worth wiring to a scheduled job (e.g. Streamlit Cloud doesn't offer
 native cron, so this would need an external trigger) before this deployment is treated as
 retention-compliant, not just functional.
+
+## D-026: Isolated headless dependency installation (corrects D-019)
+Date: 2026-09-04
+Status: Accepted
+Context: Standard Ultralytics declares opencv-python; installing it alongside
+opencv-python-headless creates overlapping cv2 files. D-019's dependency claim
+was incorrect. The user approved fixing the project without changing shared Anaconda.
+Decision: Use the official ultralytics-opencv-headless distribution with the
+existing >=8.4.93 floor and unchanged Python import API. Install into a fresh
+project virtual environment. CI runs pip check after dependency installation.
+Source: https://github.com/ultralytics/ultralytics/blob/main/docs/en/quickstart.md
+Consequences: Do not install both Ultralytics distributions in one environment.
+Existing shared-environment conflicts are not fixed by changing requirements alone.
+
+## D-027: Extend 30-day retention to generated outputs
+Date: 2026-09-04
+Status: Accepted
+Context: The user explicitly approved deleting generated videos and CSVs after
+30 days, matching D-024, and approved preview mode and scheduling instructions.
+Decision: Extend the purge CLI to cover generated .mp4/.csv files beneath this
+repository's output directory, using modification time for file age. Never
+follow symbolic links or Windows junctions; never traverse data/ or models/.
+Add a read-only dry-run that counts eligible DB rows and previews eligible files.
+Keep deletion explicit; document daily local scheduling without installing a job
+or triggering deletion during development. No remote/cloud filesystem access.
+Consequences: output/ is exclusively generated scratch/export data. Custom output
+paths outside it and raw source data need a separate operator policy. File deletion
+is irreversible; preview first. Database retention remains based on event time.
+
+## D-028: Scope known CPU OCR notices; retain model behavior
+Date: 2026-09-04
+Status: Accepted
+Context: EasyOCR 1.7.2 hardcodes DataLoader pin_memory=True and uses Torch
+dynamic quantization. Neither notice indicates a failed plate read. Disabling
+quantization solely to silence a notice can worsen CPU latency and alter results.
+Decision: Match only the known Torch quantized-tensor notice while creating the
+reader, and the no-accelerator pin-memory notice during CPU OCR. Use temporary
+warnings contexts, not permanent global filters or third-party source patches.
+Preserve other warnings, exceptions, confidence thresholds, and quantization.
+Consequences: This is a narrow compatibility workaround, not an upstream fix.
+Python versions without context-aware warnings share filters between threads;
+the exact message/module matches limit scope, but remove the workaround once
+EasyOCR no longer triggers these notices. No accuracy improvement is claimed.

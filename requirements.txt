@@ -1,4 +1,4 @@
-ultralytics>=8.4.93
+ultralytics-opencv-headless>=8.4.93
 opencv-python-headless>=4.10.0
 easyocr>=1.7.2
 lap>=0.5.13
