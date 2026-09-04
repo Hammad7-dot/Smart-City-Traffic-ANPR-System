@@ -11,6 +11,7 @@ DEDUPE_WINDOW_SECONDS = 5
 
 class EventStore:
     def __init__(self, db_path: str):
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db_path)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA_PATH.read_text())
@@ -23,8 +24,9 @@ class EventStore:
             datetime.fromisoformat(event_timestamp) - timedelta(seconds=DEDUPE_WINDOW_SECONDS)
         ).isoformat()
         row = self.conn.execute(
-            "SELECT 1 FROM vehicle_events WHERE plate_number = ? AND event_timestamp >= ? LIMIT 1",
-            (plate_number, cutoff),
+            "SELECT 1 FROM vehicle_events WHERE plate_number = ? "
+            "AND event_timestamp >= ? AND event_timestamp <= ? LIMIT 1",
+            (plate_number, cutoff, event_timestamp),
         ).fetchone()
         return row is not None
 
@@ -63,6 +65,8 @@ class EventStore:
 
     def purge_older_than(self, days: int) -> int:
         """Deletes vehicle_events rows older than `days` (D-024 retention policy). Returns rows deleted."""
+        if days < 0:
+            raise ValueError("Retention days must be non-negative")
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         with self.conn:
             cur = self.conn.execute("DELETE FROM vehicle_events WHERE event_timestamp < ?", (cutoff,))

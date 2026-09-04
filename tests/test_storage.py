@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from pipeline.storage import EventStore
 
 
@@ -26,6 +28,36 @@ def test_first_event_is_recorded(tmp_path):
     assert store.record_event(**_event()) is True
     assert _count(store) == 1
     store.close()
+
+
+def test_future_event_does_not_suppress_earlier_crossing(tmp_path):
+    store = EventStore(str(tmp_path / "test.db"))
+    try:
+        store.record_event(**_event(event_timestamp="2026-01-01T12:01:00"))
+        assert store.record_event(**_event(event_timestamp="2026-01-01T12:00:00")) is True
+        assert _count(store) == 2
+    finally:
+        store.close()
+
+
+def test_negative_retention_rejected_without_deleting_events(tmp_path):
+    store = EventStore(str(tmp_path / "test.db"))
+    try:
+        store.record_event(**_event(event_timestamp=datetime.now().isoformat()))
+        with pytest.raises(ValueError, match="non-negative"):
+            store.purge_older_than(-1)
+        assert _count(store) == 1
+    finally:
+        store.close()
+
+
+def test_store_creates_missing_parent_directory(tmp_path):
+    store = EventStore(str(tmp_path / "nested" / "traffic.db"))
+    try:
+        assert store.record_event(**_event()) is True
+        assert _count(store) == 1
+    finally:
+        store.close()
 
 
 def test_duplicate_plate_within_window_is_skipped(tmp_path):

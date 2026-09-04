@@ -11,6 +11,8 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  # avoid OpenMP double-ini
 
 import argparse
 import csv
+import logging
+from contextlib import ExitStack, closing
 from datetime import datetime, timedelta
 from fractions import Fraction
 from pathlib import Path
@@ -25,20 +27,28 @@ from pipeline.plate_detection import crop_plate_region, load_plate_detector
 from pipeline.storage import EventStore
 from pipeline.tracking import iter_tracked_frames
 
+logger = logging.getLogger(__name__)
 
-def run(source: str, db_path: str, output_video: str, output_csv: str, line_ratio: float = 0.6):
+
+def run(source: str, db_path: str, output_video: str, output_csv: str,
+        line_ratio: float = 0.6, conf: float = 0.3):
+    if not 0 <= line_ratio <= 1:
+        raise ValueError("line_ratio must be between 0 and 1")
+    if not 0 <= conf <= 1:
+        raise ValueError("conf must be between 0 and 1")
+    cap = cv2.VideoCapture(source)
+    try:
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open video source: {source}")
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    finally:
+        cap.release()
+
     detector = load_detector()
     plate_detector = load_plate_detector()  # None -> crop_plate_region falls back (D-011)
     ocr_reader = load_reader()
-    store = EventStore(db_path)
-
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open video source: {source}")
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    cap.release()
 
     line_y = height * line_ratio
     counter = LineCrossingCounter(line_y=line_y)
@@ -46,35 +56,35 @@ def run(source: str, db_path: str, output_video: str, output_csv: str, line_rati
     Path(output_video).parent.mkdir(parents=True, exist_ok=True)
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
 
-    # H.264 via PyAV, not cv2.VideoWriter's default "mp4v" fourcc - browsers
-    # can't decode mp4v/MPEG-4 Part 2, so a mp4v-written .mp4 downloads and
-    # plays fine in a native player but never plays in an in-browser <video>
-    # element (see docs/decisions.md D-016, supersedes D-015's ffmpeg shim).
-    container = av.open(output_video, mode="w")
-    stream = container.add_stream("libx264", rate=Fraction(fps).limit_denominator())
-    stream.width = width
-    stream.height = height
-    stream.pix_fmt = "yuv420p"
-
-    csv_file = open(output_csv, "w", newline="")
-    csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(
-        ["track_id", "vehicle_type", "plate_number", "ocr_confidence", "is_low_confidence", "frame_number", "event_timestamp"]
-    )
-
     start_time = datetime.now()
     crossing_count = 0
     frame_count = 0
 
-    try:
-        for frame_index, frame, boxes in iter_tracked_frames(detector, source, VEHICLE_CLASS_MAP):
+    # Register resources as soon as they open, including during partial setup.
+    with ExitStack() as resources:
+        store = resources.enter_context(closing(EventStore(db_path)))
+        # H.264 is browser-playable; OpenCV's default mp4v is not (D-016).
+        container = resources.enter_context(closing(av.open(output_video, mode="w")))
+        stream = container.add_stream("libx264", rate=Fraction(fps).limit_denominator())
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+
+        csv_file = resources.enter_context(open(output_csv, "w", newline="", encoding="utf-8"))
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(
+            ["track_id", "vehicle_type", "plate_number", "ocr_confidence", "is_low_confidence", "frame_number", "event_timestamp"]
+        )
+
+        for frame_index, frame, boxes in iter_tracked_frames(detector, source, VEHICLE_CLASS_MAP, conf=conf):
             frame_count += 1
-            cv2.line(frame, (0, int(line_y)), (width, int(line_y)), (0, 255, 255), 2)
+            annotated = frame.copy()
+            cv2.line(annotated, (0, int(line_y)), (width, int(line_y)), (0, 255, 255), 2)
 
             for box in boxes:
-                cv2.rectangle(frame, (int(box.x1), int(box.y1)), (int(box.x2), int(box.y2)), (0, 200, 0), 2)
+                cv2.rectangle(annotated, (int(box.x1), int(box.y1)), (int(box.x2), int(box.y2)), (0, 200, 0), 2)
                 cv2.putText(
-                    frame, f"{box.vehicle_type}#{box.track_id}", (int(box.x1), max(int(box.y1) - 8, 0)),
+                    annotated, f"{box.vehicle_type}#{box.track_id}", (int(box.x1), max(int(box.y1) - 8, 0)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 0), 2,
                 )
 
@@ -86,9 +96,15 @@ def run(source: str, db_path: str, output_video: str, output_csv: str, line_rati
                 event_time = start_time + timedelta(seconds=frame_index / fps)
                 event_timestamp = event_time.isoformat()
 
-                plate_crop = crop_plate_region(frame, (box.x1, box.y1, box.x2, box.y2), plate_detector)
-                plate_text, confidence = read_plate(ocr_reader, plate_crop)
-                is_low_confidence = confidence < LOW_CONFIDENCE_THRESHOLD
+                # NFR reliability: a failed plate stage must not lose the crossing.
+                try:
+                    plate_crop = crop_plate_region(frame, (box.x1, box.y1, box.x2, box.y2), plate_detector)
+                    plate_text, confidence = read_plate(ocr_reader, plate_crop)
+                except Exception:
+                    # Do not log exception text: model errors may contain plate PII.
+                    logger.warning("Plate recognition failed at frame %s; preserving crossing", frame_index)
+                    plate_text, confidence = None, 0.0
+                is_low_confidence = not plate_text or confidence < LOW_CONFIDENCE_THRESHOLD
 
                 written = store.record_event(
                     track_id=box.track_id,
@@ -104,17 +120,12 @@ def run(source: str, db_path: str, output_video: str, output_csv: str, line_rati
                         [box.track_id, box.vehicle_type, plate_text, f"{confidence:.3f}", int(is_low_confidence), frame_index, event_timestamp]
                     )
 
-            av_frame = av.VideoFrame.from_ndarray(frame, format="bgr24")
+            av_frame = av.VideoFrame.from_ndarray(annotated, format="bgr24")
             for packet in stream.encode(av_frame):
                 container.mux(packet)
 
         for packet in stream.encode():
             container.mux(packet)
-    finally:
-        container.close()
-        csv_file.close()
-        store.close()
-
     print(f"Processed {frame_count} frames, {crossing_count} crossing events.")
     print(f"Output video: {output_video}")
     print(f"Output CSV:   {output_csv}")

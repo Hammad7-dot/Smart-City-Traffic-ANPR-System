@@ -131,6 +131,7 @@ if run_clicked and kind in ("image", "video"):
                             output_video=output_video,
                             output_csv=output_csv,
                             line_ratio=line_ratio,
+                            conf=conf,
                         )
                 except Exception as e:
                     st.error(f"Could not process this video: {e}")

@@ -38,14 +38,15 @@ Full requirements and design rationale: [docs/SPEC.md](docs/SPEC.md),
 
 ## Known limitations
 
-- No dedicated license-plate detector model is bundled — no no-auth-required pretrained
-  weights could be sourced at build time. `pipeline/plate_detection.py` falls back to
-  OCR-ing the lower third of each vehicle's bounding box. Drop real weights at
-  `models/plate_model.pt` to use a real detector; no code changes needed.
-- Plate OCR accuracy is low in this configuration as a direct result of the above.
-- Runs on CPU (the installed `torch` build is CPU-only). Works, just slow.
+- Model weights are gitignored, not bundled with a fresh clone. A locally trained plate
+  detector is documented in D-021; place its weights at `models/plate_model.pt` to use it.
+  Without that file, plate detection falls back to OCR of the vehicle crop's lower third.
+- OCR accuracy depends on plate resolution and footage quality, even with a dedicated
+  detector (see the sample-video baseline in D-022). Low-confidence and missing reads
+  are flagged; they are not reliable plate identifications.
+- OCR is configured for CPU. Processing high-resolution footage can be slow.
 
-See [docs/decisions.md](docs/decisions.md) (D-011, D-013) for details.
+See [docs/decisions.md](docs/decisions.md) (D-011, D-013, D-021, D-022) for details.
 
 ## Setup
 
@@ -56,9 +57,9 @@ pip install -r requirements.txt
 Set `KMP_DUPLICATE_LIB_OK=TRUE` in the environment before running anything that imports
 `torch` (this Anaconda install links two OpenMP runtimes and crashes on import otherwise).
 
-`ffmpeg` on PATH is optional but recommended: the Upload & Detect page's in-browser video
-preview needs it to transcode the pipeline's mp4v output to browser-playable H.264. Without
-it, the preview player is skipped but the download button still works.
+Video output is encoded directly as browser-playable H.264 through PyAV; a separate
+`ffmpeg` executable is not required. Non-H.264 uploads are normalized through PyAV
+before detection (D-016/D-017).
 
 ## Usage
 
@@ -77,6 +78,15 @@ python -m pipeline.purge --db database/traffic.db --days 30
 Test suite: `python -m pytest` (bare `pytest` won't resolve `import pipeline` without an installed
 package — see `tests/conftest.py`). CI (`.github/workflows/ci.yml`) runs a clean install + full
 test suite on every push/PR.
+
+If an existing Windows pytest temporary directory is inaccessible, use a new, unused
+workspace-local path, for example `python -m pytest --basetemp=output/pytest-local-01`.
+Pytest clears its base temporary directory, so never point this option at existing data.
+
+The pipeline rejects counting-line positions outside 0–1. Plate-stage failures preserve
+the crossing with an empty, low-confidence plate; output resources are closed even when
+setup fails. Database parent directories are created automatically. Retention days must
+be non-negative. The Upload & Detect confidence slider applies to both images and videos.
 
 ## Tech stack
 

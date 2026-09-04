@@ -54,7 +54,7 @@ def detect_image(frame: np.ndarray, detector, plate_detector, ocr_reader, conf: 
                 x1=float(x1), y1=float(y1), x2=float(x2), y2=float(y2),
                 plate_number=plate_text,
                 ocr_confidence=confidence,
-                is_low_confidence=confidence < LOW_CONFIDENCE_THRESHOLD,
+                is_low_confidence=not plate_text or confidence < LOW_CONFIDENCE_THRESHOLD,
             )
         )
     return detections
